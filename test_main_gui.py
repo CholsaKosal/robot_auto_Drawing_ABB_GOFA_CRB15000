@@ -24,6 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # --- Constants (Consolidated) ---
 SCRIPT_DIR = os.getenv("SCRIPT_DIR", ".") # Default to current dir if not set
 DATA_DIR = os.getenv("DATA_DIR", ".") # Default to current dir
+
 # TMP_POSITION_FILE = os.path.join(DATA_DIR, "Tmp_position.txt") # Likely not needed for drawing
 TMP_CAPTURE_PATH = os.path.join(DATA_DIR, "temp_capture.png") # For captured image
 TMP_EDGE_OUTPUT_PATH = os.path.join(DATA_DIR, "temp_edges_{}.png") # For edge previews
@@ -35,18 +36,23 @@ SIMULATION_PORT = 55000
 
 # Drawing Specific Constants (from provided code)
 FINAL_ROBOT_POSITION = (0,-350, 0) # Use X, Z, Y format from previous examples
-A4_WIDTH_MM = 210
-A4_HEIGHT_MM = 297
+A4_WIDTH_MM = 190
+A4_HEIGHT_MM = 277
 PEN_UP_Z = -15
 PEN_DOWN_Z = -7
 MIN_CONTOUR_LENGTH_PX = 10
 
 # Threshold options: (Label, threshold1, threshold2)
+# THRESHOLD_OPTIONS = [
+#     ("Detail", 25, 75),
+#     ("Balanced", 50, 150),
+#     ("Simple", 75, 200),
+#     ("Minimal", 100, 250)
+# ]
+
+# 10 Threshold options for testing (if needed)
 THRESHOLD_OPTIONS = [
-    ("Detail", 25, 75),
-    ("Balanced", 50, 150),
-    ("Simple", 75, 200),
-    ("Minimal", 100, 250)
+    ("Option {}".format(i), i*10, i*20) for i in range(1, 11)
 ]
 
 # Rough estimate for time per command (adjust based on observation)

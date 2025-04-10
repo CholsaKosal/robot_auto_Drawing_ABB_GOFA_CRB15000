@@ -38,7 +38,7 @@ FINAL_ROBOT_POSITION = (0, -350, 0) # Use X, Z, Y format (X, Depth, Y) - NOTE: Z
 A4_WIDTH_MM = 180  # Drawing area width
 A4_HEIGHT_MM = 217 # Drawing area height
 PEN_UP_Z = -15     # Pen up position (depth)
-PEN_DOWN_Z = -5   # Pen down position (depth)
+PEN_DOWN_Z = -7   # Pen down position (depth)
 MIN_CONTOUR_LENGTH_PX = 50 # Minimum contour length in pixels to consider
 
 # Threshold options
@@ -275,6 +275,13 @@ class RUNME_GUI:
         self.cancel_button = None # *** NEW: Reference to cancel button ***
         self.reconnect_button = None # *** NEW: Reference to reconnect button ***
 
+        self.last_drawing_status = {
+            "total_commands": 0,
+            "completed_commands": 0,
+            "status": "None",  # e.g., "Completed", "Cancelled", "Connection Lost", "Protocol Error", "Failed to Resume"
+            "error_message": ""
+        }
+        
         # Resume related variables
         self.resume_needed = False # *** NEW: Flag indicating connection was lost during drawing ***
         self.resume_commands = None # *** NEW: Store remaining commands ***
@@ -332,6 +339,19 @@ class RUNME_GUI:
         tk.Label(self.main_frame, text="Robot Drawing Options", font=("Arial", 16)).pack(pady=10)
         conn_type = "Simulation" if self.connection_var.get() == "simulation" else "Real Robot"
         tk.Label(self.main_frame, text=f"Connected to: {conn_type}", fg="green").pack(pady=5)
+        last_status = self.last_drawing_status["status"]
+        if last_status not in ["None", "Completed"]:
+            status_frame = tk.Frame(self.main_frame, relief=tk.RIDGE, borderwidth=2)
+            status_frame.pack(pady=10, padx=10, fill='x')
+            tk.Label(status_frame, text="Previous Drawing Status:", font=("Arial", 10, "bold")).pack(anchor='w')
+            status_text = f"Status: {last_status}"
+            if self.last_drawing_status["total_commands"] > 0:
+                status_text += f" (Stopped at command {self.last_drawing_status['completed_commands'] + 1}" \
+                                f" of {self.last_drawing_status['total_commands']})"
+            tk.Label(status_frame, text=status_text).pack(anchor='w', padx=5)
+            if self.last_drawing_status["error_message"]:
+                tk.Label(status_frame, text=f"Details: {self.last_drawing_status['error_message']}", wraplength=400).pack(anchor='w', padx=5)
+
 
         tk.Button(self.main_frame, text="Capture Image to Draw",
                   command=self.capture_image_page, width=30).pack(pady=5) # Changed command
@@ -699,9 +719,9 @@ class RUNME_GUI:
         move_ok = False
         if self.connected and self.socket:
             if self.send_message_internal(command_str_final):
-                response_r_final = self.receive_message_internal(timeout=3.0)
+                response_r_final = self.receive_message_internal(timeout=20.0)
                 if response_r_final == "R":
-                    response_d_final = self.receive_message_internal(timeout=10.0) # Longer timeout for final move
+                    response_d_final = self.receive_message_internal(timeout=30.0) # Longer timeout for final move
                     if response_d_final == "D":
                         logging.info("Robot reached final position.") #
                         move_ok = True
@@ -718,6 +738,9 @@ class RUNME_GUI:
             final_status = f"{success_message} Robot at final position."
         else:
             final_status = f"{failure_message} Failed to reach final position."
+
+        self.last_drawing_status["status"] = success_message # Use the original reason (Completed, Cancelled, etc.)
+        self.last_drawing_status["error_message"] = "" if move_ok else "Failed to reach final position."
 
         self.window.after(0, lambda fs=final_status: self.update_final_status(fs))
 
@@ -780,13 +803,19 @@ class RUNME_GUI:
                     self.resume_commands = commands_to_send # Keep the full list
                     self.resume_start_index_global = i # Save the index of the command that failed (0-based)
                     self.resume_total_original_commands = total_commands
+                    
+                    self.last_drawing_status["total_commands"] = total_commands
+                    self.last_drawing_status["completed_commands"] = i # Command i failed
+                    self.last_drawing_status["status"] = "Connection Lost"
+                    self.last_drawing_status["error_message"] = f"Lost connection before sending command {i+1}"
+                    
                     self.window.after(0, lambda idx=i: self.update_drawing_status(idx, total_commands, "Connection Lost!"))
                     self.window.after(1000, self.connection_setup_page) # Go to connection page to allow reconnect
                     self.drawing_in_progress = False # Allow reconnect button to work
                     return # Exit thread
 
                 # 2. Wait for Receipt 'R'
-                response_r = self.receive_message_internal(timeout=3.0) # If receive fails...
+                response_r = self.receive_message_internal(timeout=20.0) # If receive fails...
                 if response_r is None: # Check for None indicating socket error/timeout
                     # *** NEW: Handle connection loss ***
                     logging.error(f"Connection lost while waiting for 'R' after command {current_command_global_index}. Preparing to resume.")
@@ -799,13 +828,27 @@ class RUNME_GUI:
                     self.drawing_in_progress = False
                     return # Exit thread
                 elif response_r != "R":
-                    logging.error(f"Robot did not confirm receipt (R) for command {current_command_global_index}, got '{response_r}'. Stopping.") # 
-                    self.window.after(0, lambda idx=i, r=response_r: self.update_drawing_status(idx, total_commands, f"Error: No 'R' (Got {r})")) # 
-                    self._send_final_position_and_cleanup("Drawing Stopped (Protocol Error).", "Drawing Stopped (Protocol Error).")
+                    error_msg = f"Robot did not confirm receipt (R) for command {current_command_global_index}, got '{response_r}'."
+                    logging.error(error_msg + " Preparing to resume.") # Changed log message
+                    # *** NEW: Prepare for resume on 'R' error ***
+                    self.resume_needed = True
+                    self.resume_commands = commands_to_send
+                    self.resume_start_index_global = i # Resume from the command that failed confirmation
+                    self.resume_total_original_commands = total_commands
+                    # Update last status
+                    self.last_drawing_status["total_commands"] = total_commands
+                    self.last_drawing_status["completed_commands"] = i
+                    self.last_drawing_status["status"] = "Protocol Error (R)"
+                    self.last_drawing_status["error_message"] = error_msg
+                    # *** End NEW ***
+                    self.window.after(0, lambda idx=i, r=response_r: self.update_drawing_status(idx, total_commands, f"Error: No 'R' (Got {r}). Reconnect to resume."))
+                    # *** NEW: Go to connection page instead of cleanup ***
+                    self.window.after(1000, self.connection_setup_page)
+                    self.drawing_in_progress = False
                     return # Exit thread
 
                 # 3. Wait for Done 'D'
-                response_d = self.receive_message_internal(timeout=10.0) # Longer timeout for move completion 
+                response_d = self.receive_message_internal(timeout=30.0) # Longer timeout for move completion 
                 if response_d is None: # Check for None indicating socket error/timeout
                     # *** NEW: Handle connection loss ***
                     logging.error(f"Connection lost while waiting for 'D' after command {current_command_global_index}. Preparing to resume.")
@@ -819,11 +862,25 @@ class RUNME_GUI:
                     self.drawing_in_progress = False
                     return # Exit thread
                 elif response_d != "D":
-                    logging.error(f"Robot did not confirm completion (D) for command {current_command_global_index}, got '{response_d}'. Stopping.") # 
-                    self.window.after(0, lambda idx=i, d=response_d: self.update_drawing_status(idx + 1, total_commands, f"Error: No 'D' (Got {d})")) # 
-                    self._send_final_position_and_cleanup("Drawing Stopped (Protocol Error).", "Drawing Stopped (Protocol Error).")
+                    error_msg = f"Robot did not confirm completion (D) for command {current_command_global_index}, got '{response_d}'."
+                    logging.error(error_msg + " Preparing to resume.") # Changed log message
+                    # *** NEW: Prepare for resume on 'D' error ***
+                    self.resume_needed = True
+                    self.resume_commands = commands_to_send
+                    # Resume from the *next* command since 'R' was received, but 'D' failed
+                    self.resume_start_index_global = i + 1
+                    self.resume_total_original_commands = total_commands
+                    # Update last status
+                    self.last_drawing_status["total_commands"] = total_commands
+                    self.last_drawing_status["completed_commands"] = i + 1 # Command i movement likely completed
+                    self.last_drawing_status["status"] = "Protocol Error (D)"
+                    self.last_drawing_status["error_message"] = error_msg
+                    # *** End NEW ***
+                    self.window.after(0, lambda idx=i, d=response_d: self.update_drawing_status(idx + 1, total_commands, f"Error: No 'D' (Got {d}). Reconnect to resume."))
+                    # *** NEW: Go to connection page instead of cleanup ***
+                    self.window.after(1000, self.connection_setup_page)
+                    self.drawing_in_progress = False
                     return # Exit thread
-                # --- End Protocol ---
 
                 commands_processed_in_this_run += 1
                 # Update GUI progress
@@ -861,7 +918,7 @@ class RUNME_GUI:
             self.handle_connection_loss() # Use centralized handler
             return False
 
-    def receive_message_internal(self, timeout=3.0) -> Optional[str]:
+    def receive_message_internal(self, timeout=20.0) -> Optional[str]:
          """ Receives message without triggering GUI popups on error. Returns message or None. """
          if not self.connected or not self.socket: return None
          try:
@@ -950,9 +1007,21 @@ class RUNME_GUI:
                 # Normal connection, go to drawing options
                 self.drawing_options_page() # Go to drawing options
         else:
-            messagebox.showerror("Connection Failed", "Failed to establish connection.")
-            # Stay on connection page, user might need to retry or go back
-
+            if self.resume_needed:
+                messagebox.showerror("Reconnection Failed", "Failed to reconnect. Cannot resume the previous drawing.")
+                # Reset resume state as we can't continue
+                self.resume_needed = False
+                self.resume_commands = None
+                self.resume_total_original_commands = 0
+                self.resume_start_index_global = 0
+                # Update last status to reflect the failed resume attempt
+                self.last_drawing_status["status"] = "Resume Failed"
+                self.last_drawing_status["error_message"] = "Could not reconnect to robot."
+                # Go back to drawing options page after acknowledging the error
+                self.drawing_options_page()
+            else:
+                messagebox.showerror("Connection Failed", "Failed to establish connection.")
+            # Stay on connection page if it was a normal connection attempt that failed
     def move_to_final_before_resume(self):
         """Sends robot to FINAL_ROBOT_POSITION and then starts resume. Runs in thread."""
         def move_and_resume_thread():
@@ -964,9 +1033,9 @@ class RUNME_GUI:
             move_ok = False
             if self.connected and self.socket:
                 if self.send_message_internal(command_str_final):
-                    response_r = self.receive_message_internal(timeout=3.0)
+                    response_r = self.receive_message_internal(timeout=5.0)
                     if response_r == "R":
-                        response_d = self.receive_message_internal(timeout=10.0)
+                        response_d = self.receive_message_internal(timeout=5.0)
                         if response_d == "D":
                             logging.info("Robot reached FINAL_ROBOT_POSITION.")
                             move_ok = True
@@ -984,16 +1053,20 @@ class RUNME_GUI:
                  # NOTE: run_drawing_loop expects the FULL command list and the start_index
                  self.run_drawing_loop(self.resume_commands, self.resume_start_index_global)
                  # The run_drawing_loop itself now handles progress updates etc.
-            else:
-                logging.error("Failed to move robot to resume position. Cannot resume.")
-                self.window.after(0, lambda: messagebox.showerror("Resume Failed", "Could not move robot to safe resume position. Please reconnect and try starting a new drawing."))
-                # Reset resume state as we failed
-                self.resume_needed = False
-                self.resume_commands = None
-                self.resume_total_original_commands = 0
-                self.resume_start_index_global = 0
+            else: # if move_ok is False
+                error_msg = "Failed to move robot to safe resume position."
+                logging.error(error_msg + " Cannot resume automatically, but allowing retry.")
+                # *** NEW: Update status but keep resume state ***
+                self.last_drawing_status["status"] = "Resume Failed (Pre-move)"
+                self.last_drawing_status["error_message"] = error_msg
+                # Keep previous command counts if available
+                # Ensure resume_needed remains True, DO NOT reset resume variables here
+                # *** End NEW ***
+                self.window.after(0, lambda: messagebox.showwarning("Resume Warning", error_msg + "\nConnection might be unstable. You can try 'Reconnect & Resume' again."))
+                # Reset drawing flag
                 self.drawing_in_progress = False
-                self.window.after(1000, self.drawing_options_page) # Go back to options
+                # *** NEW: Go back to connection page to allow retry ***
+                self.window.after(1000, self.connection_setup_page)
 
         # Start the move and potential resume in a new thread
         threading.Thread(target=move_and_resume_thread, daemon=True).start()

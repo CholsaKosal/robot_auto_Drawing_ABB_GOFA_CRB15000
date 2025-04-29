@@ -1,3 +1,5 @@
 # TROB1_auto_Drawing
 
-## please change the path accordingly and unpage the pack and go for testing
+This repository contains a Python script that automates the process of GOFA CRB 15000 drawing any image input in the system. Please unpack pack and go file of robot studio and use the main.py script to run the program.
+
+## Showcase

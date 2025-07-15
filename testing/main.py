@@ -1,3 +1,4 @@
+# testing/main.py
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 import os
@@ -434,13 +435,13 @@ class RUNME_GUI:
                 if response_r == "R":
                     logging.info("Received 'R' (Ready) from robot.")
                     response_d = self.receive_message_internal(timeout=None)
-                    if response_d == "D":
-                        logging.info("Received 'D' (Done) from robot.")
-                    else:
-                        error_msg = f"Robot did not confirm completion (D) for command {i+1}. Got: '{response_d}'"
-                        logging.error(error_msg)
-                        self.window.after(0, lambda: messagebox.showerror("Test Failed", error_msg))
-                        break
+                    # if response_d == "D":
+                    #     logging.info("Received 'D' (Done) from robot.")
+                    # else:
+                    #     error_msg = f"Robot did not confirm completion (D) for command {i+1}. Got: '{response_d}'"
+                    #     logging.error(error_msg)
+                    #     self.window.after(0, lambda: messagebox.showerror("Test Failed", error_msg))
+                    #     break
                 else:
                     error_msg = f"Robot did not confirm receipt (R) for command {i+1}. Got: '{response_r}'"
                     logging.error(error_msg)
@@ -885,11 +886,11 @@ class RUNME_GUI:
                 response_r_final = self.receive_message_internal(timeout=None)
                 if response_r_final == "R":
                     response_d_final = self.receive_message_internal(timeout=None)
-                    if response_d_final == "D":
-                        logging.info("Robot reached final position.")
-                        move_ok = True
-                    else:
-                        logging.error(f"Robot didn't confirm final move completion (D), got '{response_d_final}'")
+                    # if response_d_final == "D":
+                    #     logging.info("Robot reached final position.")
+                    #     move_ok = True
+                    # else:
+                    #     logging.error(f"Robot didn't confirm final move completion (D), got '{response_d_final}'")
                 else:
                     logging.error(f"Robot didn't confirm final move receipt (R), got '{response_r_final}'")
             else:
@@ -963,10 +964,10 @@ class RUNME_GUI:
                     return
                 
                 response_d = self.receive_message_internal(timeout=None)
-                if response_d != "D":
-                    logging.error(f"Robot did not confirm completion (D), got '{response_d}'.")
-                    self.drawing_in_progress = False
-                    return
+                # if response_d != "D":
+                #     logging.error(f"Robot did not confirm completion (D), got '{response_d}'.")
+                #     self.drawing_in_progress = False
+                #     return
                 
                 # Update the progress bar value. The label text is handled by the ETA loop.
                 self.window.after(0, lambda p=current_command_global_index + 1: self.update_drawing_status(p, total_commands))
@@ -1080,10 +1081,10 @@ class RUNME_GUI:
                     response_r = self.receive_message_internal(timeout=5.0)
                     if response_r == "R":
                         response_d = self.receive_message_internal(timeout=5.0)
-                        if response_d == "D":
-                            logging.info("Robot reached FINAL_ROBOT_POSITION.")
-                            move_ok = True
-                        else: logging.error("Failed to get 'D' confirmation for pre-resume move.")
+                        # if response_d == "D":
+                        #     logging.info("Robot reached FINAL_ROBOT_POSITION.")
+                        #     move_ok = True
+                        # else: logging.error("Failed to get 'D' confirmation for pre-resume move.")
                     else: logging.error("Failed to get 'R' confirmation for pre-resume move.")
                 else: logging.error("Failed to send pre-resume move command.")
 

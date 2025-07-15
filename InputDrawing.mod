@@ -31,7 +31,7 @@ MODULE InputDrawing
                 ConvertSocketStrToPose(data);
                 ! Wait until ConvertSocketStrToPose completes
                 IF success THEN
-                    MoveL Offs(WorkSpaceCenter1,x,y,z),v1000,z100,tool2\WObj:=Wobj_1;                
+                    MoveL Offs(WorkSpaceCenter1,x,-y,z),v1000,z100,tool2\WObj:=Wobj_1;                
                     ! SocketSend client_socket\Str:="D";
                 ENDIF
             ENDIF
@@ -39,24 +39,25 @@ MODULE InputDrawing
     ENDPROC
 
     ! for real life robot station
-!    PROC SocketConnect()
-!        SocketCreate temp_socket;
-!        SocketBind temp_socket,"192.168.125.1",1025;
-!        SocketListen temp_socket;
-!        SocketAccept temp_socket,client_socket,\Time:=WAIT_MAX;
-!        TPWrite "Socket connection established.";
-!    ENDPROC
-
-    ! for simulation station
-    
     PROC SocketConnect()
-        ! Create, bind, listen, and accept the socket connection
         SocketCreate temp_socket;
-        SocketBind temp_socket,"127.0.0.1",55000;
+        SocketBind temp_socket,"192.168.125.1",1025;
         SocketListen temp_socket;
         SocketAccept temp_socket,client_socket,\Time:=WAIT_MAX;
         TPWrite "Socket connection established.";
-    ENDPROC    
+    ENDPROC
+
+    ! for simulation station
+    
+!    PROC SocketConnect()
+!        ! Create, bind, listen, and accept the socket connection
+!        SocketCreate temp_socket;
+!        SocketBind temp_socket,"127.0.0.1",55000;
+!        SocketListen temp_socket;
+!        SocketAccept temp_socket,client_socket,\Time:=WAIT_MAX;
+!        TPWrite "Socket connection established.";
+!    ENDPROC    
+
     PROC ConvertSocketStrToPose(string data)
         ! Find indices of the commas
         idx1:=StrFind(data,1,",");

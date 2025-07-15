@@ -17,7 +17,7 @@ MODULE InputDrawing
     VAR num idx2;
     VAR bool success;
     CONST robtarget home1:=[[409.328464947,30.699294352,-350.922061873],[0.999898286,-0.005230998,0.00469865,0.012408784],[0,-1,1,0],[9E+09,9E+09,9E+09,9E+09,9E+09,9E+09]];
-    CONST robtarget WorkSpaceCenter1:=[[75.78,312.76,9.799641871],[0.988089954,-0.00592235,0.00373461,-0.153717993],[0,0,0,0],[9E+09,9E+09,9E+09,9E+09,9E+09,9E+09]];
+    CONST robtarget WorkSpaceCenter1:=[[9.78,391.21,-4.41],[0.988086,-0.00583922,0.00371725,-0.153745],[-1,0,0,0],[9E+09,9E+09,9E+09,9E+09,9E+09,9E+09]];
 
     PROC main()
         MoveJ home1,v1000,z100,tool2\WObj:=Wobj_1;
@@ -32,7 +32,7 @@ MODULE InputDrawing
                 ! Wait until ConvertSocketStrToPose completes
                 IF success THEN
                     MoveL Offs(WorkSpaceCenter1,x,y,z),v1000,z100,tool2\WObj:=Wobj_1;                
-                    SocketSend client_socket\Str:="D";
+                    ! SocketSend client_socket\Str:="D";
                 ENDIF
             ENDIF
         ENDWHILE

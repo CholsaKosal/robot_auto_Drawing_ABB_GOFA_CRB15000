@@ -1,32 +1,26 @@
 import tkinter as tk
-from tkinter import messagebox, filedialog, ttk # Added ttk for progress bar
+from tkinter import messagebox, filedialog, ttk
 import os
 import threading
 import time
 import logging
 import socket
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
-import cv2 # <-- Added
-import numpy as np # <-- Added (likely already implicitly used by cv2)
+import cv2
+import numpy as np
 import math
-from PIL import Image, ImageTk # <-- Added
-# Consider adding tkinterdnd2 for drag-and-drop later if needed
-# import tkinterdnd2
-
-# --- Drawing Logic Imports ---
-# (image_to_contours_internal, scale_point_to_a4, create_drawing_paths, calculate_distance) defined below
+from PIL import Image, ImageTk
+import ast
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # --- Constants (Consolidated) ---
-SCRIPT_DIR = os.getenv("SCRIPT_DIR", ".") # Default to current dir if not set
-DATA_DIR = os.getenv("DATA_DIR", ".") # Default to current dir
+SCRIPT_DIR = os.getenv("SCRIPT_DIR", ".")
+DATA_DIR = os.getenv("DATA_DIR", ".")
 
-# TMP_POSITION_FILE = os.path.join(DATA_DIR, "Tmp_position.txt") # Likely not needed for drawing
-TMP_CAPTURE_PATH = os.path.join(DATA_DIR, "temp_capture.png") # For captured image
-TMP_EDGE_OUTPUT_PATH = os.path.join(DATA_DIR, "temp_edges_{}.png") # For edge previews
+TMP_CAPTURE_PATH = os.path.join(DATA_DIR, "temp_capture.png")
+TMP_EDGE_OUTPUT_PATH = os.path.join(DATA_DIR, "temp_edges_{}.png")
 
 REAL_ROBOT_HOST = '192.168.125.1'
 REAL_ROBOT_PORT = 1025
@@ -34,227 +28,20 @@ SIMULATION_HOST = '127.0.0.1'
 SIMULATION_PORT = 55000
 
 # Drawing Specific Constants
-FINAL_ROBOT_POSITION = (0, -350, 0) # Use X, Z, Y format (X, Depth, Y) - NOTE: Z is depth here
+FINAL_ROBOT_POSITION = (0, -50, 0) # Use X, Z, Y format (X, Depth, Y) - NOTE: Z is depth here
 A4_WIDTH_MM = 170  # Drawing area width
 A4_HEIGHT_MM = 207 # Drawing area height
-PEN_DOWN_Z = -10   # Pen down position (depth)
+DEFAULT_PEN_DOWN_Z = -10   # Default pen down position (depth)
 
 MIN_CONTOUR_LENGTH_PX = 10 # Minimum contour length in pixels to consider
 
-# Threshold options
+# Threshold options for Canny edge detection
 THRESHOLD_OPTIONS = [
     ("Option {}".format(i), i*10, i*20) for i in range(1, 8)
 ]
 
-# Time estimation factor
-TIME_ESTIMATE_FACTOR = 0.02 # seconds per command estimated
-
-SIGNATURE_POINTS = ((0, -50, 0), (0, -20, 0), (0, -50, 0))
-
-def create_signature_commands(points):
-    """Converts raw signature points (X, Z, Y) into robot commands."""
-
-    try:
-        test_z = float(self.pen_down_z_var.get())
-    except ValueError:
-        messagebox.showerror("Invalid Input", "The Z-coordinate for testing must be a valid number.")
-        return    
-    pen_up_z = 1.5 * test_z
-
-    commands = []
-    if not points:
-        return commands
-
-    # 1. Move to the start of the signature with Pen Up
-    start_x, _, start_y = points[0] # Use X, Y from the first point
-    commands.append((start_x, pen_up_z, start_y)) # Ensure pen is up
-
-    # 2. Add all signature points as commands (using their specified Z)
-    for point in points:
-        commands.append(point) # Add the point (x, z, y) directly
-
-    # 3. Lift pen after the last point
-    if commands:
-        last_x, _, last_y = points[-1]
-        commands.append((last_x, pen_up_z, last_y)) # Lift pen at the end
-
-    return commands
-
-
-# --- Drawing Helper Function ---
-def calculate_distance(p1, p2):
-    """Calculates Euclidean distance between two points (x, y)."""
-    if p1 is None or p2 is None: return float('inf')
-    return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-
-# --- Drawing Image Processing Functions ---
-def image_to_contours_internal(image_path_or_array, threshold1, threshold2, save_edge_path=None):
-    """
-    Internal version: Convert image to contours using specific thresholds.
-    Can accept a file path OR a pre-loaded cv2 image array.
-    Does NOT print status messages.
-    :param image_path_or_array: Path to the input image or numpy array (BGR or Grayscale).
-    :param threshold1: Lower threshold for Canny edge detection.
-    :param threshold2: Upper threshold for Canny edge detection.
-    :param save_edge_path: Optional path to save the edge image for preview.
-    :return: List of contours (pixel coordinates), image_width, image_height, or (None, 0, 0) on failure.
-    """
-    if isinstance(image_path_or_array, str):
-        image = cv2.imread(image_path_or_array, cv2.IMREAD_GRAYSCALE)
-    elif isinstance(image_path_or_array, np.ndarray):
-        if len(image_path_or_array.shape) == 3: # BGR
-            image = cv2.cvtColor(image_path_or_array, cv2.COLOR_BGR2GRAY)
-        else: # Assuming already grayscale
-            image = image_path_or_array
-    else:
-        logging.error("Invalid input type for image_to_contours_internal")
-        return None, 0, 0
-
-    if image is None:
-        logging.error(f"Could not read or process image input.")
-        return None, 0, 0
-
-    image_height, image_width = image.shape[:2]
-    if image_height == 0 or image_width == 0:
-         logging.error("Invalid image dimensions.")
-         return None, 0, 0
-
-    blurred = cv2.GaussianBlur(image, (5, 5), 0)
-    edges = cv2.Canny(blurred, threshold1, threshold2)
-
-    if save_edge_path:
-        try:
-            cv2.imwrite(save_edge_path, edges)
-        except Exception as e:
-            logging.error(f"Failed to save edge image to {save_edge_path}: {e}")
-
-    contours, hierarchy = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    filtered_contours = [c for c in contours if cv2.arcLength(c, closed=False) > MIN_CONTOUR_LENGTH_PX]
-
-    contours_xy = []
-    for contour in filtered_contours:
-        points = contour.squeeze().tolist()
-        if not isinstance(points, list) or not points: continue # Skip empty squeezes
-        if isinstance(points[0], int): # Handle single point contour
-            points = [points]
-        contours_xy.append([(p[0], p[1]) for p in points if isinstance(p, (list, tuple)) and len(p) == 2]) # Ensure points are valid pairs
-
-    # Filter out empty contours that might result from the above processing
-    contours_xy = [c for c in contours_xy if c]
-
-    return contours_xy, image_width, image_height
-
-
-def scale_point_to_a4(point_xy, image_width, image_height, scale_factor):
-    """ Scales and transforms a single (x, y) pixel coordinate to centered A4 (mm)."""
-    x_pixel, y_pixel = point_xy
-    center_x_pixel = image_width / 2
-    center_y_pixel = image_height / 2
-    x_centered_pixel = x_pixel - center_x_pixel
-    y_centered_pixel = center_y_pixel - y_pixel # Invert y-axis
-    x_mm = x_centered_pixel * scale_factor
-    y_mm = y_centered_pixel * scale_factor
-    return (x_mm, y_mm)
-
-def create_drawing_paths(contours_xy, image_width, image_height, optimize_paths=True):
-    """ Takes list of contours (pixel coordinates), scales them, creates drawing paths."""
-
-    try:
-        test_z = float(self.pen_down_z_var.get())
-    except ValueError:
-        messagebox.showerror("Invalid Input", "The Z-coordinate for testing must be a valid number.")
-        return
-    pen_up_z = 1.5 * test_z
-
-    if not contours_xy or image_width <= 0 or image_height <= 0:
-        return []
-
-    scale_x = A4_WIDTH_MM / image_width
-    scale_y = A4_HEIGHT_MM / image_height
-    scale_factor = min(scale_x, scale_y)
-
-    scaled_contours = []
-    for contour in contours_xy:
-        # Ensure contour is not empty before scaling
-        if not contour: continue
-        scaled_contour = [scale_point_to_a4(p, image_width, image_height, scale_factor) for p in contour]
-        if len(scaled_contour) >= 2:
-            scaled_contours.append(scaled_contour)
-        elif len(scaled_contour) == 1 :
-             # Handle single points - represent as a tiny segment back to itself?
-             # This ensures it gets processed for pen down/up at least.
-            scaled_contours.append([scaled_contour[0], scaled_contour[0]])
-
-
-    if not scaled_contours:
-        return []
-
-    ordered_contours = []
-    last_point = None # Keep track of the last point of the previously added contour
-    if optimize_paths:
-        remaining_contours = list(scaled_contours)
-        # Find a starting contour (e.g., closest to origin, or just the first)
-        # For simplicity, start with the first one if available.
-        if remaining_contours:
-             current_contour = remaining_contours.pop(0)
-             ordered_contours.append(current_contour)
-             last_point = current_contour[-1]
-
-             while remaining_contours:
-                 best_dist = float('inf')
-                 best_idx = -1
-                 best_reversed = False
-
-                 for i, contour in enumerate(remaining_contours):
-                     start_point = contour[0]
-                     end_point = contour[-1]
-                     dist_start = calculate_distance(last_point, start_point)
-                     dist_end = calculate_distance(last_point, end_point)
-
-                     if dist_start < best_dist:
-                         best_dist = dist_start
-                         best_idx = i
-                         best_reversed = False
-                     if dist_end < best_dist: # Check second condition independently
-                         best_dist = dist_end
-                         best_idx = i
-                         best_reversed = True
-
-                 if best_idx != -1:
-                      next_contour = remaining_contours.pop(best_idx)
-                      if best_reversed:
-                          next_contour.reverse()
-                      ordered_contours.append(next_contour)
-                      last_point = next_contour[-1]
-                 else:
-                    # Should not happen if remaining_contours is not empty, but break just in case
-                   logging.warning("Path optimization loop finished unexpectedly.")
-                   break # Avoid infinite loop if something goes wrong
-        scaled_contours = ordered_contours # Use the optimized order
-        # logging.info(f"Optimized contour drawing order.") # Reduce noise
-    else:
-         # If not optimizing, just use the original order
-         scaled_contours = [c for c in scaled_contours] # Ensure it's a list copy if needed
-
-
-    robot_commands = []
-    for contour in scaled_contours:
-        if not contour: continue # Should not happen, but safe check
-        start_point = contour[0]
-        robot_commands.append((start_point[0], pen_up_z, start_point[1])) # Move pen up to start X, Y
-        robot_commands.append((start_point[0], PEN_DOWN_Z, start_point[1])) # Move pen down at start X, Y
-
-        for i in range(len(contour) - 1):
-            end_point = contour[i+1]
-            # Avoid duplicate commands for single-point contours handled earlier
-            if end_point != contour[i]:
-                robot_commands.append((end_point[0], PEN_DOWN_Z, end_point[1])) # Draw to next point
-
-        final_point = contour[-1]
-        robot_commands.append((final_point[0], pen_up_z, final_point[1])) # Lift pen at the end of contour
-
-    return robot_commands
-
+# Time estimation factor (seconds per command)
+TIME_ESTIMATE_FACTOR = 0.02
 
 class RUNME_GUI:
     """Main GUI application for the Robotics System."""
@@ -270,41 +57,40 @@ class RUNME_GUI:
         self.socket = None
         self.connected = False
         self.connection_established = False
-        # self.positions = [] # Removed, not used for drawing 
 
         # Camera related variables
         self.cap = None
         self.camera_running = False
-        self.camera_frame_label = None # Label to display camera feed 
+        self.camera_frame_label = None
         self.capture_button = None
         self.camera_back_button = None
 
-        # Drawing process related
-        self.current_image_path = None # Path to the image being processed
-        self.threshold_options_data = {} # Store commands for each threshold choice
+        # Drawing process related variables
+        self.current_image_path = None
+        self.threshold_options_data = {}
+        self.edge_preview_paths = {}
         self.selected_commands = None
         self.drawing_in_progress = False
-        self.cancel_requested = False 
+        self.cancel_requested = False
         self.progress_bar = None
         self.status_label = None
-        self.cancel_button = None 
-        self.reconnect_button = None 
+        self.cancel_button = None
+        self.reconnect_button = None
 
-        # --- MODIFICATION START ---
-        self.pen_down_z_var = tk.StringVar(value=str(PEN_DOWN_Z))
+        # Pen position and control variables
+        self.pen_down_z_var = tk.StringVar(value=str(DEFAULT_PEN_DOWN_Z))
         self.safe_center_z_var = tk.StringVar(value=str(-50.0))
-        
         self.pause_event = threading.Event()
         self.pause_resume_button = None
 
-        # --- ETA Countdown variables ---
+        # ETA Countdown variables
         self.eta_update_id = None
         self.drawing_start_time = 0
         self.total_paused_time = 0
         self.pause_start_time = 0
         self.progress_text_var = tk.StringVar()
-        # --- MODIFICATION END ---
 
+        # Status tracking for previous drawing attempts
         self.last_drawing_status = {
             "total_commands": 0,
             "completed_commands": 0,
@@ -312,13 +98,248 @@ class RUNME_GUI:
             "error_message": ""
         }
         
-        # Resume related variables
-        self.resume_needed = False 
-        self.resume_commands = None 
-        self.resume_total_original_commands = 0 
-        self.resume_start_index_global = 0 
+        # Resume-related variables
+        self.resume_needed = False
+        self.resume_commands = None
+        self.resume_start_index_global = 0
 
+        # Start the application
         self.main_page()
+
+    # --- Drawing Logic Methods (Refactored) ---
+
+    def load_and_create_signature_commands(self):
+        """
+        Loads signature points from tmp_signaturepoint.py, injects the dynamic Z value,
+        parses them safely, and formats them into executable commands.
+        """
+        try:
+            pen_down_z = float(self.pen_down_z_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid Input", "The Pen Down Z-coordinate must be a valid number.")
+            return None
+
+        try:
+            with open('tmp_signaturepoint.py', 'r') as f:
+                content = f.read()
+            
+            # Replace the placeholder string with the actual dynamic value
+            content_with_z = content.replace('PEN_DOWN_Z', str(pen_down_z))
+            
+            # Extract the tuple part of the string after the '='
+            points_str = content_with_z.split('=', 1)[1].strip()
+            # Remove a trailing comment if it exists (e.g., '# type: ignore')
+            if '#' in points_str:
+                points_str = points_str.split('#', 1)[0].strip()
+
+            # Safely evaluate the string to get the tuple of points
+            raw_points = ast.literal_eval(points_str)
+            logging.info("Successfully loaded and parsed signature points from file.")
+
+        except (FileNotFoundError, IndexError, SyntaxError, ValueError) as e:
+            logging.warning(f"Could not load or parse tmp_signaturepoint.py: {e}. Using a default signature.")
+            # Define a fallback signature using the dynamic pen_down_z
+            raw_points = (
+                (50, pen_down_z, 50), (50, pen_down_z, -50), (-50, pen_down_z, -50),
+                (-50, pen_down_z, 50), (50, pen_down_z, 50)
+            )
+        
+        # Now format these points with pen up/down commands
+        return self._format_signature_commands(raw_points, pen_down_z)
+
+    def _format_signature_commands(self, processed_points, pen_down_z):
+        """
+        Takes a list of points with correct Z values and adds pen-up/down commands.
+        """
+        # Calculate a safe pen-up position
+        pen_up_z = pen_down_z / 5 if pen_down_z > 0 else pen_down_z * 1.25
+
+        commands = []
+        if not processed_points:
+            return commands
+
+        # 1. Move to the start of the signature with the pen up
+        start_x, _, start_y = processed_points[0]
+        commands.append((start_x, pen_up_z, start_y))
+
+        # 2. Add all processed signature points as commands
+        # The points already have the correct Z values from the loading step
+        for point in processed_points:
+            commands.append(point)
+
+        # 3. Lift the pen after the last point
+        last_x, _, last_y = processed_points[-1]
+        commands.append((last_x, pen_up_z, last_y))
+
+        return commands
+
+    def create_drawing_paths(self, contours_xy, image_width, image_height, optimize_paths=True):
+        """
+        Takes a list of contours (pixel coordinates), scales them to the drawing area,
+        optimizes the drawing order, and generates the final robot commands.
+        """
+        try:
+            pen_down_z = float(self.pen_down_z_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid Input", "The Pen Down Z-coordinate must be a valid number.")
+            return None # Return None on error
+
+        # Calculate a safe pen-up position (higher, i.e., less negative)
+        pen_up_z = pen_down_z / 10 if pen_down_z > 0 else pen_down_z * 1.5
+        
+        if not contours_xy or image_width <= 0 or image_height <= 0:
+            return []
+
+        # Calculate scale factor to fit the image to the A4 drawing area
+        scale_x = A4_WIDTH_MM / image_width
+        scale_y = A4_HEIGHT_MM / image_height
+        scale_factor = min(scale_x, scale_y)
+
+        # Scale all contour points from pixel coordinates to robot-friendly mm coordinates
+        scaled_contours = []
+        for contour in contours_xy:
+            if not contour: continue
+            scaled_contour = [self.scale_point_to_a4(p, image_width, image_height, scale_factor) for p in contour]
+            if len(scaled_contour) >= 1:
+                scaled_contours.append(scaled_contour)
+
+        if not scaled_contours:
+            return []
+
+        # Optimize the drawing path to minimize travel distance
+        if optimize_paths:
+            ordered_contours = self.optimize_contour_order(scaled_contours)
+        else:
+            ordered_contours = scaled_contours
+
+        # Generate the final list of robot commands (X, Z, Y)
+        robot_commands = []
+        for contour in ordered_contours:
+            if not contour: continue
+            
+            # Handle single-point contours (dots)
+            if len(contour) == 1:
+                point = contour[0]
+                robot_commands.append((point[0], pen_up_z, point[1]))   # Move to location
+                robot_commands.append((point[0], pen_down_z, point[1])) # Pen down
+                robot_commands.append((point[0], pen_up_z, point[1]))   # Pen up
+                continue
+
+            # Handle multi-point contours (lines)
+            start_point = contour[0]
+            robot_commands.append((start_point[0], pen_up_z, start_point[1]))   # Move to start of line
+            robot_commands.append((start_point[0], pen_down_z, start_point[1])) # Pen down
+
+            # Draw along the contour
+            for point in contour[1:]:
+                robot_commands.append((point[0], pen_down_z, point[1]))
+
+            # Lift pen at the end of the contour
+            final_point = contour[-1]
+            robot_commands.append((final_point[0], pen_up_z, final_point[1]))
+
+        return robot_commands
+        
+    def optimize_contour_order(self, contours: List[List[Tuple[float, float]]]) -> List[List[Tuple[float, float]]]:
+        """
+        Sorts contours to minimize travel distance between them using a nearest-neighbor approach.
+        """
+        if not contours:
+            return []
+
+        ordered_contours = []
+        remaining_contours = list(contours)
+        
+        # Start with the first contour
+        current_contour = remaining_contours.pop(0)
+        ordered_contours.append(current_contour)
+        last_point = current_contour[-1]
+
+        while remaining_contours:
+            best_dist = float('inf')
+            best_idx = -1
+            best_reversed = False
+
+            # Find the closest next contour (or the reversed version of it)
+            for i, contour in enumerate(remaining_contours):
+                dist_start = self.calculate_distance(last_point, contour[0])
+                dist_end = self.calculate_distance(last_point, contour[-1])
+
+                if dist_start < best_dist:
+                    best_dist, best_idx, best_reversed = dist_start, i, False
+                if dist_end < best_dist:
+                    best_dist, best_idx, best_reversed = dist_end, i, True
+
+            if best_idx != -1:
+                next_contour = remaining_contours.pop(best_idx)
+                if best_reversed:
+                    next_contour.reverse()
+                ordered_contours.append(next_contour)
+                last_point = next_contour[-1]
+            else:
+                logging.warning("Path optimization loop finished unexpectedly.")
+                break # Safety break
+
+        return ordered_contours
+
+    def image_to_contours_internal(self, image_path_or_array, threshold1, threshold2, save_edge_path=None):
+        """
+        Convert image to contours using Canny edge detection.
+        Accepts a file path or a pre-loaded cv2 image array.
+        """
+        if isinstance(image_path_or_array, str):
+            image = cv2.imread(image_path_or_array, cv2.IMREAD_GRAYSCALE)
+        elif isinstance(image_path_or_array, np.ndarray):
+            image = cv2.cvtColor(image_path_or_array, cv2.COLOR_BGR2GRAY) if len(image_path_or_array.shape) == 3 else image_path_or_array
+        else:
+            logging.error("Invalid input type for image_to_contours_internal")
+            return None, 0, 0
+
+        if image is None:
+            logging.error("Could not read or process image input.")
+            return None, 0, 0
+
+        image_height, image_width = image.shape[:2]
+        if image_height == 0 or image_width == 0:
+            logging.error("Invalid image dimensions.")
+            return None, 0, 0
+
+        blurred = cv2.GaussianBlur(image, (5, 5), 0)
+        edges = cv2.Canny(blurred, threshold1, threshold2)
+
+        if save_edge_path:
+            try:
+                cv2.imwrite(save_edge_path, edges)
+            except Exception as e:
+                logging.error(f"Failed to save edge image to {save_edge_path}: {e}")
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        filtered_contours = [c for c in contours if cv2.arcLength(c, closed=False) > MIN_CONTOUR_LENGTH_PX]
+
+        contours_xy = []
+        for contour in filtered_contours:
+            points = contour.squeeze().tolist()
+            if not isinstance(points, list) or not points: continue
+            if isinstance(points[0], int): points = [points]
+            contours_xy.append([(p[0], p[1]) for p in points if isinstance(p, (list, tuple)) and len(p) == 2])
+
+        return [c for c in contours_xy if c], image_width, image_height
+
+    @staticmethod
+    def scale_point_to_a4(point_xy, image_width, image_height, scale_factor):
+        """ Scales and transforms a single (x, y) pixel coordinate to a centered robot coordinate (mm)."""
+        x_pixel, y_pixel = point_xy
+        x_centered_pixel = x_pixel - (image_width / 2)
+        y_centered_pixel = (image_height / 2) - y_pixel  # Invert y-axis for standard Cartesian coordinates
+        x_mm = x_centered_pixel * scale_factor
+        y_mm = y_centered_pixel * scale_factor
+        return (x_mm, y_mm)
+
+    @staticmethod
+    def calculate_distance(p1, p2):
+        """Calculates Euclidean distance between two points (x, y)."""
+        if p1 is None or p2 is None: return float('inf')
+        return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
     # --- Page Navigation ---
     def main_page(self):
@@ -364,6 +385,8 @@ class RUNME_GUI:
         tk.Label(self.main_frame, text="Robot Drawing Options", font=("Arial", 16)).pack(pady=10)
         conn_type = "Simulation" if self.connection_var.get() == "simulation" else "Real Robot"
         tk.Label(self.main_frame, text=f"Connected to: {conn_type}", fg="green").pack(pady=5)
+        
+        # Display status of the last drawing attempt
         last_status = self.last_drawing_status["status"]
         if last_status not in ["None", "Completed"]:
             status_frame = tk.Frame(self.main_frame, relief=tk.RIDGE, borderwidth=2)
@@ -377,28 +400,26 @@ class RUNME_GUI:
             if self.last_drawing_status["error_message"]:
                 tk.Label(status_frame, text=f"Details: {self.last_drawing_status['error_message']}", wraplength=400).pack(anchor='w', padx=5)
 
+        # Controls for testing and calibration
         controls_frame = tk.Frame(self.main_frame, pady=5, relief=tk.GROOVE, borderwidth=2)
         controls_frame.pack(pady=10, padx=10, fill='x')
         
         tk.Label(controls_frame, text="Testing & Calibration Controls", font=("Arial", 11, "bold")).grid(row=0, column=0, columnspan=3, pady=5)
 
         tk.Label(controls_frame, text="Pen Down Z (for drawing):").grid(row=1, column=0, sticky='w', padx=5)
-        pen_down_z_entry = tk.Entry(controls_frame, textvariable=self.pen_down_z_var, width=10)
-        pen_down_z_entry.grid(row=1, column=1, padx=5)
+        tk.Entry(controls_frame, textvariable=self.pen_down_z_var, width=10).grid(row=1, column=1, padx=5)
         self.send_z_button = tk.Button(controls_frame, text="Test at (0, 0, Z)", command=self.send_to_test_z_action)
         self.send_z_button.grid(row=1, column=2, padx=10)
 
         tk.Label(controls_frame, text="Safe Center Z:").grid(row=2, column=0, sticky='w', padx=5)
-        safe_center_z_entry = tk.Entry(controls_frame, textvariable=self.safe_center_z_var, width=10)
-        safe_center_z_entry.grid(row=2, column=1, padx=5)
+        tk.Entry(controls_frame, textvariable=self.safe_center_z_var, width=10).grid(row=2, column=1, padx=5)
         self.safe_center_button = tk.Button(controls_frame, text="Go to Safe Center", command=self.send_to_safe_center_action)
         self.safe_center_button.grid(row=2, column=2, padx=10)
 
-        # --- MODIFICATION START ---
         self.test_workspace_button = tk.Button(controls_frame, text="Test Workspace Area", command=self.test_workspace_action)
         self.test_workspace_button.grid(row=3, column=0, columnspan=3, pady=5)
-        # --- MODIFICATION END ---
 
+        # Main action buttons
         tk.Button(self.main_frame, text="Capture Image to Draw",
                   command=self.capture_image_page, width=30).pack(pady=5)
         tk.Button(self.main_frame, text="Input Image to Draw",
@@ -432,33 +453,34 @@ class RUNME_GUI:
         logging.info(f"Sending robot to safe center (0, {safe_z}, 0)")
         threading.Thread(target=self._send_command_sequence_thread, args=([(0, safe_z, 0)], self.safe_center_button), daemon=True).start()
 
-    # --- MODIFICATION START ---
     def test_workspace_action(self):
         """Sends the robot on a path to outline the workspace corners."""
-
         try:
             test_z = float(self.pen_down_z_var.get())
         except ValueError:
             messagebox.showerror("Invalid Input", "The Z-coordinate for testing must be a valid number.")
             return
-        pen_up_z = 1.5 * test_z
+        
+        pen_up_z =  test_z / 10 if test_z > 0 else test_z * 1.5
 
         if hasattr(self, 'test_workspace_button') and self.test_workspace_button.winfo_exists():
             self.test_workspace_button.config(state=tk.DISABLED)
         
         # Define the workspace path (X, Z, Y)
+        w = A4_WIDTH_MM / 3
+        h = A4_HEIGHT_MM / 3
         workspace_path = [
-            (50, test_z, 50),
-            (50, test_z, -50),
-            (-50, test_z, -50),
-            (-50, test_z, 50),
-            (0, test_z, 0), # Return to center
-            (0, pen_up_z, 0) # Lift pen
+            (w, pen_up_z, h),   # Top-right (pen up)
+            (w, test_z, h),     # Top-right (pen down)
+            (w, test_z, -h),    # Bottom-right
+            (-w, test_z, -h),   # Bottom-left
+            (-w, test_z, h),    # Top-left
+            (w, test_z, h),     # Back to Top-right
+            (0, pen_up_z, 0)    # Return to center (pen up)
         ]
         
         logging.info("Starting workspace test...")
         threading.Thread(target=self._send_command_sequence_thread, args=(workspace_path, self.test_workspace_button), daemon=True).start()
-    # --- MODIFICATION END ---
 
     def _send_command_sequence_thread(self, commands: List[Tuple], button_to_re_enable: tk.Button):
         """Thread worker to send a sequence of commands, one by one."""
@@ -470,23 +492,12 @@ class RUNME_GUI:
                 logging.info("Test sequence cancelled.")
                 break
             
-            command_str = f"{x:.2f},{z},{y:.2f}"
+            command_str = f"{x:.2f},{z:.2f},{y:.2f}"
             logging.info(f"Sending command {i+1}/{len(commands)}: {command_str}")
             
             if self.send_message_internal(command_str):
                 response_r = self.receive_message_internal(timeout=10.0)
-                if response_r == "R":
-                    logging.info("Received 'R' (Ready) from robot.")
-                    # --- MODIFICATION: REMOVED 'D' CHECK ---
-                    # response_d = self.receive_message_internal(timeout=None)
-                    # if response_d == "D":
-                    #     logging.info("Received 'D' (Done) from robot.")
-                    # else:
-                    #     error_msg = f"Robot did not confirm completion (D) for command {i+1}. Got: '{response_d}'"
-                    #     logging.error(error_msg)
-                    #     self.window.after(0, lambda: messagebox.showerror("Test Failed", error_msg))
-                    #     break
-                else:
+                if response_r != "R":
                     error_msg = f"Robot did not confirm receipt (R) for command {i+1}. Got: '{response_r}'"
                     logging.error(error_msg)
                     self.window.after(0, lambda: messagebox.showerror("Test Failed", error_msg))
@@ -516,8 +527,8 @@ class RUNME_GUI:
         self.camera_back_button = tk.Button(button_frame, text="Back", command=self.stop_camera_and_go_back)
         self.camera_back_button.pack(side=tk.LEFT, padx=5)
 
-        self.window.bind('s', self.capture_action_event)
-        self.window.bind('S', self.capture_action_event)
+        self.window.bind('s', lambda event: self.capture_action())
+        self.window.bind('S', lambda event: self.capture_action())
 
         self.start_camera_feed()
 
@@ -537,11 +548,9 @@ class RUNME_GUI:
              messagebox.showerror("Camera Error", f"Error initializing camera: {e}")
              self.stop_camera_and_go_back()
 
-
     def _update_camera_frame(self):
         """Internal method to continuously update the camera feed label."""
-        if not self.camera_running or not self.cap:
-             return
+        if not self.camera_running or not self.cap: return
 
         ret, frame = self.cap.read()
         if ret:
@@ -549,7 +558,7 @@ class RUNME_GUI:
             pil_image = Image.fromarray(cv_image)
             imgtk = ImageTk.PhotoImage(image=pil_image)
 
-            if self.camera_frame_label:
+            if self.camera_frame_label and self.camera_frame_label.winfo_exists():
                 self.camera_frame_label.imgtk = imgtk
                 self.camera_frame_label.configure(image=imgtk)
         else:
@@ -573,10 +582,6 @@ class RUNME_GUI:
         self.window.unbind('S')
         self.drawing_options_page()
 
-    def capture_action_event(self, event=None):
-         """Wrapper for key press event."""
-         self.capture_action()
-
     def capture_action(self):
         """Captures the current frame and processes it."""
         if not self.camera_running or not self.cap:
@@ -587,7 +592,6 @@ class RUNME_GUI:
         self.stop_camera_feed()
         self.window.unbind('s')
         self.window.unbind('S')
-
 
         if ret:
             try:
@@ -602,7 +606,6 @@ class RUNME_GUI:
         else:
             messagebox.showerror("Capture Error", "Failed to capture frame from camera.")
             self.drawing_options_page()
-
 
     # --- Input Image Workflow ---
     def input_image_page(self):
@@ -639,7 +642,6 @@ class RUNME_GUI:
         self.current_image_path = filepath
         self.show_threshold_options(self.current_image_path)
 
-
     # --- Threshold Selection Workflow ---
     def show_threshold_options(self, image_path):
         """Processes image with different thresholds and shows options."""
@@ -660,7 +662,6 @@ class RUNME_GUI:
 
         threading.Thread(target=self._process_threshold_options_thread, args=(image_path, options_frame, loading_label), daemon=True).start()
 
-
     def _process_threshold_options_thread(self, image_path, options_frame, loading_label):
         """Background thread to generate commands for each threshold option."""
         results = {}
@@ -669,7 +670,7 @@ class RUNME_GUI:
         for i, (label, t1, t2) in enumerate(THRESHOLD_OPTIONS):
             logging.info(f"Processing option: {label} (t1={t1}, t2={t2})")
             preview_path = TMP_EDGE_OUTPUT_PATH.format(i)
-            contours_xy, w, h = image_to_contours_internal(image_path, t1, t2, save_edge_path=preview_path)
+            contours_xy, w, h = self.image_to_contours_internal(image_path, t1, t2, save_edge_path=preview_path)
 
             if contours_xy is None or w == 0 or h == 0:
                  logging.warning(f"Failed to process contours for option {label}")
@@ -677,7 +678,7 @@ class RUNME_GUI:
                  preview_paths[label] = None
                  continue
 
-            commands = create_drawing_paths(contours_xy, w, h, optimize_paths=True)
+            commands = self.create_drawing_paths(contours_xy, w, h, optimize_paths=True)
             if commands:
                 num_commands = len(commands)
                 est_time_sec = num_commands * TIME_ESTIMATE_FACTOR
@@ -685,9 +686,7 @@ class RUNME_GUI:
                 results[label] = {
                     "commands": commands, 
                     "count": num_commands,
-                    "time_str": f"{est_time_min:.1f} min",
-                    "t1": t1,
-                    "t2": t2
+                    "time_str": f"{est_time_min:.1f} min"
                 }
                 preview_paths[label] = preview_path if os.path.exists(preview_path) else None
             else:
@@ -697,7 +696,6 @@ class RUNME_GUI:
 
         self.window.after(0, lambda: self._display_threshold_options(options_frame, loading_label, results, preview_paths))
 
-
     def _display_threshold_options(self, options_frame, loading_label, results, preview_paths):
          """Updates the GUI with the processed threshold options."""
          loading_label.destroy()
@@ -706,7 +704,7 @@ class RUNME_GUI:
          self.edge_preview_paths = preview_paths
 
          default_selected = False
-         for i, (label, t1, t2) in enumerate(THRESHOLD_OPTIONS):
+         for label, t1, t2 in THRESHOLD_OPTIONS:
              option_data = results.get(label)
              if option_data:
                  count = option_data["count"]
@@ -714,10 +712,10 @@ class RUNME_GUI:
                  radio_text = f"{label} (t1={t1}, t2={t2}) - Cmds: {count}, Est: {time_str}"
                  rb = tk.Radiobutton(
                     options_frame, 
-                 text=radio_text,
-                 variable=self.selected_threshold_option,
-                 value=label,
-                 command=lambda l=label: self.show_edge_preview(l)
+                    text=radio_text,
+                    variable=self.selected_threshold_option,
+                    value=label,
+                    command=lambda l=label: self.show_edge_preview(l)
                  )
                  rb.pack(anchor='w')
                  if not default_selected:
@@ -730,12 +728,9 @@ class RUNME_GUI:
          button_frame = tk.Frame(self.main_frame)
          button_frame.pack(pady=10)
          tk.Button(button_frame, text="Confirm and Draw", command=self.confirm_and_start_drawing, width=20).pack(side=tk.LEFT, padx=5)
-         # --- MODIFICATION START ---
          tk.Button(button_frame, text="Save Points to File", command=self.save_points_to_file, width=20).pack(side=tk.LEFT, padx=5)
-         # --- MODIFICATION END ---
          tk.Button(button_frame, text="Back", command=self.drawing_options_page, width=20).pack(side=tk.LEFT, padx=5)
 
-    # --- MODIFICATION START ---
     def save_points_to_file(self):
         """Saves the generated drawing commands for the selected option to a text file."""
         selected_label = self.selected_threshold_option.get()
@@ -769,7 +764,6 @@ class RUNME_GUI:
             messagebox.showinfo("Success", f"Drawing points successfully saved to:\n{filepath}")
         except Exception as e:
             messagebox.showerror("Save Error", f"Could not save the file.\nError: {e}")
-    # --- MODIFICATION END ---
 
     def show_edge_preview(self, option_label):
          """Displays the edge preview image for the selected option."""
@@ -786,7 +780,6 @@ class RUNME_GUI:
                    self.preview_label.configure(image=None, text="Preview error")
          else:
               self.preview_label.configure(image=None, text="No Preview")
-
 
     def confirm_and_start_drawing(self):
         """Gets selected commands and starts the drawing process."""
@@ -808,21 +801,23 @@ class RUNME_GUI:
              self.resume_needed = False
              self.pause_event.set() # Ensure event is set (not paused) at start
              
-             # --- MODIFICATION START: ETA Calculation ---
              self.drawing_start_time = time.time()
              self.total_paused_time = 0
              self.pause_start_time = 0
-             # --- MODIFICATION END ---
 
-            # fixing drawing signature later
-            #  full_command_list = self.selected_commands + create_signature_commands(SIGNATURE_POINTS)
-             full_command_list = self.selected_commands
+             # Generate signature commands using the new dynamic loading method
+             signature_commands = self.load_and_create_signature_commands()
+             if signature_commands is None: # An error occurred (e.g., invalid Z value)
+                 self.drawing_in_progress = False # Reset flag
+                 return
+
+             full_command_list = self.selected_commands + signature_commands
+             logging.info(f"Starting drawing with {len(self.selected_commands)} image commands and {len(signature_commands)} signature commands.")
 
              threading.Thread(target=self.run_drawing_loop, args=(full_command_list,), daemon=True).start()
              self.show_drawing_progress_page(len(full_command_list))
         else:
             messagebox.showwarning("Busy", "Drawing already in progress.")
-
 
     # --- Drawing Execution Workflow ---
     def show_drawing_progress_page(self, total_commands, current_progress=0, status_message="Starting..."):
@@ -830,14 +825,12 @@ class RUNME_GUI:
          self.clear_frame()
          tk.Label(self.main_frame, text="Drawing in Progress...", font=("Arial", 16)).pack(pady=10)
 
-         # --- MODIFICATION: Use textvariable for dynamic updates ---
          self.status_label = tk.Label(self.main_frame, textvariable=self.progress_text_var)
          self.status_label.pack(pady=5)
 
          self.progress_bar = ttk.Progressbar(self.main_frame, orient="horizontal", length=300, mode="determinate", maximum=total_commands, value=current_progress)
          self.progress_bar.pack(pady=10)
 
-         # --- MODIFICATION START: Pause/Resume and Cancel Buttons ---
          controls_frame = tk.Frame(self.main_frame)
          controls_frame.pack(pady=5)
 
@@ -847,12 +840,9 @@ class RUNME_GUI:
          self.cancel_button = tk.Button(controls_frame, text="Cancel Drawing", command=self.request_cancel_drawing, width=15)
          self.cancel_button.pack(side=tk.LEFT, padx=5)
          
-         # Start the ETA update loop
          self.update_drawing_status(current_progress, total_commands)
          self._update_eta_countdown()
-         # --- MODIFICATION END ---
 
-    # --- MODIFICATION START: New ETA and Pause/Resume methods ---
     def _update_eta_countdown(self):
         """Periodically updates the ETA label with a dynamic estimate."""
         if not self.drawing_in_progress:
@@ -863,7 +853,7 @@ class RUNME_GUI:
         
         remaining_time = 0
         
-        if not self.pause_event.is_set(): # If paused, just show Paused
+        if not self.pause_event.is_set(): # If paused, just show Paused status
             self.progress_text_var.set(f"Sent {completed_cmds} / {total_cmds} commands | PAUSED")
         elif completed_cmds > 5: # Dynamic ETA after a few commands
             active_drawing_time = (time.time() - self.drawing_start_time) - self.total_paused_time
@@ -874,10 +864,7 @@ class RUNME_GUI:
         else: # Static ETA at the beginning
             elapsed_time = (time.time() - self.drawing_start_time) - self.total_paused_time
             initial_total_time = total_cmds * TIME_ESTIMATE_FACTOR
-            remaining_time = initial_total_time - elapsed_time
-
-        if remaining_time < 0:
-            remaining_time = 0
+            remaining_time = max(0, initial_total_time - elapsed_time)
 
         mins, secs = divmod(int(remaining_time), 60)
         time_str = f"{mins:02d}:{secs:02d}"
@@ -888,6 +875,7 @@ class RUNME_GUI:
         self.eta_update_id = self.window.after(1000, self._update_eta_countdown)
 
     def toggle_pause_resume(self):
+        """Toggles the pause/resume state of the drawing loop."""
         if self.pause_event.is_set():
             # --- PAUSING ---
             self.pause_event.clear()
@@ -905,13 +893,11 @@ class RUNME_GUI:
             logging.info("Drawing resumed by user.")
             if self.pause_resume_button and self.pause_resume_button.winfo_exists():
                 self.pause_resume_button.config(text="Pause")
-    # --- MODIFICATION END ---
 
     def update_drawing_status(self, current_command_index, total_commands, message=""):
         """Callback to update progress bar and status label from drawing thread."""
         if self.progress_bar and self.progress_bar.winfo_exists():
             self.progress_bar['value'] = current_command_index
-        # The text is now handled by the ETA loop, but we can set an initial message
         if message:
             self.progress_text_var.set(f"Sent {current_command_index} / {total_commands} commands | {message}")
 
@@ -920,7 +906,7 @@ class RUNME_GUI:
         if self.drawing_in_progress:
             logging.info("Cancel requested by user.")
             self.cancel_requested = True
-            self.pause_event.set() # Unblock the loop if paused
+            self.pause_event.set() # Unblock the loop if it was paused
             if self.cancel_button and self.cancel_button.winfo_exists():
                 self.cancel_button.config(text="Cancelling...", state=tk.DISABLED)
             if self.pause_resume_button and self.pause_resume_button.winfo_exists():
@@ -939,7 +925,6 @@ class RUNME_GUI:
             if self.send_message_internal(command_str_final):
                 response_r_final = self.receive_message_internal(timeout=20.0)
                 if response_r_final == "R":
-                    # --- MODIFICATION: REMOVED 'D' CHECK ---
                     logging.info("Robot received final move command.")
                     move_ok = True
                 else:
@@ -947,11 +932,7 @@ class RUNME_GUI:
             else:
                 logging.error("Failed to send final position command.") 
 
-        final_status = ""
-        if move_ok:
-            final_status = f"{success_message} Final move command sent."
-        else:
-            final_status = f"{failure_message} Failed to send final move command."
+        final_status = f"{success_message} Final move command sent." if move_ok else f"{failure_message} Failed to send final move command."
 
         self.last_drawing_status["status"] = success_message
         self.last_drawing_status["error_message"] = "" if move_ok else "Failed to send final move command."
@@ -962,7 +943,6 @@ class RUNME_GUI:
         self.cancel_requested = False
         if not self.resume_needed:
             self.resume_commands = None
-            self.resume_total_original_commands = 0
             self.resume_start_index_global = 0
 
         self.window.after(2000, self.drawing_options_page)
@@ -988,15 +968,14 @@ class RUNME_GUI:
         
         try:
             for i, (x, z, y) in enumerate(commands_to_send[start_index:], start=start_index):
-                # --- MODIFICATION: Added pause check ---
-                self.pause_event.wait() 
+                self.pause_event.wait() # This will block if the event is cleared (paused)
 
                 if self.cancel_requested:
                     logging.info(f"Cancellation detected at command {i+1}.")
                     self._send_final_position_and_cleanup("Drawing Cancelled.", "Drawing Cancelled.")
                     return
 
-                command_str = f"{x:.2f},{z},{y:.2f}"
+                command_str = f"{x:.2f},{z:.2f},{y:.2f}"
                 logging.debug(f"Sending command {i+1}/{total_commands}: {command_str}")
 
                 if not self.send_message_internal(command_str):
@@ -1011,30 +990,17 @@ class RUNME_GUI:
                     return
 
                 response_r = self.receive_message_internal(timeout=20.0)
-                if response_r is None:
-                    logging.error(f"Connection lost while waiting for 'R' after command {i+1}. Preparing to resume.")
-                    self.resume_needed = True
-                    self.resume_commands = commands_to_send
-                    self.resume_start_index_global = i
-                    self.window.after(0, lambda idx=i: self.update_drawing_status(idx, total_commands, "Connection Lost! (No 'R')"))
-                    self.window.after(1000, self.connection_setup_page)
-                    self.drawing_in_progress = False
-                    return
-                elif response_r != "R":
+                if response_r is None or response_r != "R":
                     error_msg = f"Robot did not confirm receipt (R) for command {i+1}, got '{response_r}'."
                     logging.error(error_msg + " Preparing to resume.")
                     self.resume_needed = True
                     self.resume_commands = commands_to_send
                     self.resume_start_index_global = i
-                    self.last_drawing_status = {"total_commands": total_commands, "completed_commands": i, "status": "Protocol Error (R)", "error_message": error_msg}
+                    self.last_drawing_status = {"total_commands": total_commands, "completed_commands": i, "status": f"Protocol Error (Got '{response_r}')", "error_message": error_msg}
                     self.window.after(0, lambda idx=i, r=response_r: self.update_drawing_status(idx, total_commands, f"Error: No 'R' (Got {r}). Reconnect to resume."))
                     self.window.after(1000, self.connection_setup_page)
                     self.drawing_in_progress = False
                     return
-
-                # --- MODIFICATION: REMOVED 'D' CHECK ---
-                # response_d = self.receive_message_internal(timeout=30.0)
-                # ... (rest of the D check logic removed) ...
 
                 self.window.after(0, lambda idx=i + 1: self.update_drawing_status(idx, total_commands))
 
@@ -1044,12 +1010,11 @@ class RUNME_GUI:
         except Exception as e:
             logging.error(f"Unexpected error during drawing process: {e}", exc_info=True)
             try:
-                self.window.after(0, lambda idx=i: self.update_drawing_status(idx, total_commands, f"Runtime Error: {e}"))
+                self.window.after(0, lambda: self.update_drawing_status(i, total_commands, f"Runtime Error: {e}"))
             except (tk.TclError, NameError):
                 logging.error("GUI already closed during error handling.")
             self.drawing_in_progress = False
             self.cancel_requested = False
-
 
     # --- Internal Socket Methods (without GUI popups) ---
     def send_message_internal(self, message: str) -> bool:
@@ -1080,6 +1045,7 @@ class RUNME_GUI:
              return decoded_data
          except socket.timeout:
              logging.error(f"Timeout receiving message (internal)")
+             self.handle_connection_loss()
              return None
          except (socket.error, ConnectionResetError, BrokenPipeError) as e:
              logging.error(f"Receive error (internal): {e}")
@@ -1091,9 +1057,9 @@ class RUNME_GUI:
         logging.warning("Connection lost detected.")
         was_connected = self.connected
         self.close_socket()
+        # Only show popup if we were not in the middle of a drawing process
         if was_connected and not self.drawing_in_progress and not self.resume_needed:
             self.window.after(0, lambda: messagebox.showinfo("Connection Lost", "Robot connection lost."))
-
 
     # --- Connection Handling ---
     def establish_connection(self):
@@ -1103,23 +1069,25 @@ class RUNME_GUI:
 
         host, port = (SIMULATION_HOST, SIMULATION_PORT) if self.connection_var.get() == "simulation" else (REAL_ROBOT_HOST, REAL_ROBOT_PORT)
 
-        def connection_attempt():
-            try:
-                self.close_socket()
-                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.socket.settimeout(5)
-                self.socket.connect((host, port))
-                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                self.socket.settimeout(None)
-                logging.info(f"Connected to {host}:{port}")
-                self.connected = True
-                self.window.after(0, lambda: self.handle_connection_result(True))
-            except (socket.error, socket.timeout, ConnectionRefusedError) as e:
-                logging.error(f"Connection error: {e}")
-                self.connected = False
-                self.close_socket()
-                self.window.after(0, lambda: self.handle_connection_result(False))
-        threading.Thread(target=connection_attempt, daemon=True).start()
+        threading.Thread(target=self._connection_attempt_thread, args=(host, port), daemon=True).start()
+
+    def _connection_attempt_thread(self, host, port):
+        """Thread worker for establishing a socket connection."""
+        try:
+            self.close_socket()
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(5)
+            self.socket.connect((host, port))
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            self.socket.settimeout(None)
+            logging.info(f"Connected to {host}:{port}")
+            self.connected = True
+            self.window.after(0, lambda: self.handle_connection_result(True))
+        except (socket.error, socket.timeout, ConnectionRefusedError) as e:
+            logging.error(f"Connection error: {e}")
+            self.connected = False
+            self.close_socket()
+            self.window.after(0, lambda: self.handle_connection_result(False))
 
     def handle_connection_result(self, connected):
         """Handle connection result and trigger resume if needed."""
@@ -1140,7 +1108,6 @@ class RUNME_GUI:
                 messagebox.showerror("Reconnection Failed", "Failed to reconnect. Cannot resume the previous drawing.")
                 self.resume_needed = False
                 self.resume_commands = None
-                self.resume_total_original_commands = 0
                 self.resume_start_index_global = 0
                 self.last_drawing_status["status"] = "Resume Failed"
                 self.last_drawing_status["error_message"] = "Could not reconnect to robot."
@@ -1159,9 +1126,8 @@ class RUNME_GUI:
             move_ok = False
             if self.connected and self.socket:
                 if self.send_message_internal(command_str_final):
-                    response_r = self.receive_message_internal(timeout=5.0)
+                    response_r = self.receive_message_internal(timeout=20.0)
                     if response_r == "R":
-                        # --- MODIFICATION: REMOVED 'D' CHECK ---
                         logging.info("Robot reached FINAL_ROBOT_POSITION.")
                         move_ok = True
                     else: logging.error("Failed to get 'R' confirmation for pre-resume move.")
@@ -1184,7 +1150,6 @@ class RUNME_GUI:
 
         threading.Thread(target=move_and_resume_thread, daemon=True).start()
 
-
     def close_socket(self):
         """Close socket cleanly and update flags."""
         if self.socket:
@@ -1204,7 +1169,6 @@ class RUNME_GUI:
          self.close_socket()
          self.resume_needed = False
          self.resume_commands = None
-         self.resume_total_original_commands = 0
          self.resume_start_index_global = 0
          self.main_page()
 
@@ -1213,13 +1177,14 @@ class RUNME_GUI:
         """Clear all widgets from the main frame."""
         if self.camera_running:
             self.stop_camera_feed()
-        # --- MODIFICATION: Cancel ETA update ---
         if hasattr(self, 'eta_update_id') and self.eta_update_id:
             self.window.after_cancel(self.eta_update_id)
             self.eta_update_id = None
 
         for widget in self.main_frame.winfo_children():
             widget.destroy()
+        
+        # Reset widget references
         self.camera_frame_label = None
         self.capture_button = None
         self.camera_back_button = None
@@ -1231,22 +1196,6 @@ class RUNME_GUI:
         self.preview_label = None
         self.pause_resume_button = None
 
-
-    @staticmethod
-    def run_script(script_path: str) -> bool:
-        """Run a Python script (kept for calibration)."""
-        if not os.path.exists(script_path):
-             logging.error(f"Script not found: {script_path}")
-             return False
-        try:
-            logging.info(f"Running script: {script_path}")
-            result = os.system(f'python "{script_path}"')
-            if result != 0: logging.error(f"Script {script_path} failed with exit code {result}")
-            return result == 0
-        except Exception as e:
-            logging.error(f"Error running script {script_path}: {e}")
-            return False
-
     def on_window_close(self):
         """Handle window close event."""
         logging.info("Window close requested.")
@@ -1256,11 +1205,9 @@ class RUNME_GUI:
         time.sleep(0.2)
         self.window.destroy()
 
-
 # --- Main Execution ---
 if __name__ == "__main__":
     os.makedirs(DATA_DIR, exist_ok=True)
-
     app = RUNME_GUI()
     app.window.protocol("WM_DELETE_WINDOW", app.on_window_close)
     app.window.mainloop()

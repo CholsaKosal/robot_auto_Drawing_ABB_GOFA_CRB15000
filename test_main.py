@@ -33,7 +33,7 @@ A4_WIDTH_MM = 170  # Drawing area width
 A4_HEIGHT_MM = 207 # Drawing area height
 DEFAULT_PEN_DOWN_Z = -10   # Default pen down position (depth)
 
-MIN_CONTOUR_LENGTH_PX = 10 # Minimum contour length in pixels to consider
+MIN_CONTOUR_LENGTH_PX = 30 # Minimum contour length in pixels to consider
 
 # Threshold options for Canny edge detection
 THRESHOLD_OPTIONS = [

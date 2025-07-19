@@ -45,7 +45,7 @@ Your terminal prompt should now be prefixed with `(venv)`, indicating that the v
 This project requires `OpenCV` for image processing, `NumPy` for numerical operations, and `Pillow` for handling image data in the GUI. Install them using pip:
 
 ```bash
-pip install opencv-python numpy Pillow
+pip install opencv-python numpy Pillow Flask qrcode
 ```
 
 ---
